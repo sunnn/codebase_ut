@@ -6,6 +6,7 @@ import pandas as pd
 import re
 from sqlalchemy import create_engine
 
+
 def cfgParse(cfgParam):
     cfgParser = configparser.ConfigParser()
     cfgParser.read(cfgParam)
@@ -71,45 +72,43 @@ def unit_test_validation(project, subproject, db_src_id, db_tgt_id, conn_file, t
         column = row['column']
         srcnt = tbl_count(conn_file, db_src_id, SrcHldr)
         tgtcnt = tbl_count(conn_file, db_tgt_id, TgtHldr)
-        if int(srcnt['count'])>0 and int(tgtcnt['count'])>0 and(int(srcnt['count'])==int(tgtcnt['count'])):
-            if re.search(r',',row['column']):
-                column=row['column'].split(',')
+        if int(srcnt['count']) > 0 and int(tgtcnt['count']) > 0 and (int(srcnt['count']) == int(tgtcnt['count'])):
+            if re.search(r',', row['column']):
+                column = row['column'].split(',')
             else:
-                column=row['column']
-            src_pcol= tblrcrd(conn_file,db_src_id,SrcHldr)
-            tgt_pcol= tblrcrd(conn_file,db_tgt_id,TgtHldr)
-            pcol_cnt = pcol_check(src_pcol,tgt_pcol,column)
-            #data_check = data_validation(src_pcol,tgt_pcol)
+                column = row['column']
+            src_pcol = tblrcrd(conn_file, db_src_id, SrcHldr)
+            tgt_pcol = tblrcrd(conn_file, db_tgt_id, TgtHldr)
+            pcol_cnt = pcol_check(src_pcol, tgt_pcol, column)
+            # data_check = data_validation(src_pcol,tgt_pcol)
         else:
-            print("Source Count and target cout not matching for : ",str(TgtHldr))
+            print("Source Count and target cout not matching for : ", str(TgtHldr))
             continue
 
 
-
-
-
-def tblrcrd(conn_file,conn_id,hldr):
+def tblrcrd(conn_file, conn_id, hldr):
     query = "select * from {0} limit 10".format(hldr)
-    db_connection_str=connection(conn_file,conn_id)
+    db_connection_str = connection(conn_file, conn_id)
     dbconn = create_engine(db_connection_str)
     try:
-        frame = pd.read_sql(query,dbconn)
+        frame = pd.read_sql(query, dbconn)
     except Exception as e:
-        print("Exception Occured : {}",str(e))
+        print("Exception Occured : {}", str(e))
     finally:
         dbconn.dispose()
     return frame
 
 
-def pcol_check(src_pcol,tgt_pcol,column):
-    result=src_pcol[column]==tgt_pcol[column]
+def pcol_check(src_pcol, tgt_pcol, column):
+    result = src_pcol[column] == tgt_pcol[column]
     result.all()
     return result.all()
+
 
 def dbutils(conn_file, conn_id):
     with open(conn_file, 'r') as dbrdr:
         dbdtls = [c for c in dbrdr if conn_id in c]
-        if len(dbdtls) == 0 :
+        if len(dbdtls) == 0:
             print("Db details not available for conn_id : ", conn_id)
             exit(1)
         else:
