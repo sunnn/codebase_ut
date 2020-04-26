@@ -1,0 +1,3 @@
+source_schema,source_table,column,target_schema,target_table
+sample,ratings,"uid,movieid",wcdl,ratings
+sample,ratings,uid,wcdl,

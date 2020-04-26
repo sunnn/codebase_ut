@@ -1,0 +1,8 @@
+[default]
+project=KL
+subproject=KL-I
+source_conn_id=user_mysql
+target_conn_id=user_gpsql
+credential_path=.passwd
+target_directory=D:\ut
+source_table_list=source_table_list.txt
