@@ -108,16 +108,16 @@ def pcol_check(src_pcol, tgt_pcol, column):
 def dbutils(conn_file, conn_id):
     with open(conn_file, 'r') as dbrdr:
         dbdtls = [c for c in dbrdr if conn_id in c]
-        if len(dbdtls) == 0:
-            print("Db details not available for conn_id : ", conn_id)
-            exit(1)
-        else:
-            servername = dbdtls[0].split('|')[1]
-            port = dbdtls[0].split('|')[2]
-            database = dbdtls[0].split('|')[3]
-            username = dbdtls[0].split('|')[4]
-            password = dbdtls[0].split('|')[5]
-            return servername, database, port, username, password.strip('\n')
+    if len(dbdtls) == 0:
+        print("Db details not available for conn_id : ", conn_id)
+        exit(1)
+    else:
+        servername = dbdtls[0].split('|')[1]
+        port = dbdtls[0].split('|')[2]
+        database = dbdtls[0].split('|')[3]
+        username = dbdtls[0].split('|')[4]
+        password = dbdtls[0].split('|')[5]
+    return servername, database, port, username, password.strip('\n')
 
 
 if __name__ == '__main__':
