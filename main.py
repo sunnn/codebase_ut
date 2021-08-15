@@ -131,7 +131,6 @@ if __name__ == '__main__':
     tgt_path = cfgBuilder['default']["target_directory"]
     source_list = cfgBuilder['default']["source_table_list"]
     timestamp = time.strftime("%Y%m%d%H%M%S")
-
     ValidatedFile = SourceFileCheck(source_list)
     if ValidatedFile.empty == False:
         unit_test_validation(project, subproject, db_src_id, db_tgt_id, conn_file, tgt_path, timestamp, ValidatedFile)
