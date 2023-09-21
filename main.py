@@ -1,5 +1,4 @@
-import sys
-import configparser
+from ut-config-parse import read_param
 import os
 import time
 import pandas as pd
@@ -7,16 +6,7 @@ import re
 from sqlalchemy import create_engine
 
 
-def cfgParse(cfgParam):
-    cfgParser = configparser.ConfigParser()
-    cfgParser.read(cfgParam)
-    section = 'default'
-    dictionary = {}
-    for section in cfgParser.sections():
-        dictionary[section] = {}
-        for option in cfgParser.options(section):
-            dictionary[section][option] = cfgParser.get(section, option)
-    return dictionary
+
 
 
 def SourceFileCheck(source_list):
