@@ -4,135 +4,198 @@ import os
 import time
 import pandas as pd
 import re
+import logging
 from sqlalchemy import create_engine
+import hvac
+from typing import Dict, Tuple
+
+# ------------------ Setup Logging ------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 
 
-def cfgParse(cfgParam):
+# ------------------ Config Parser ------------------
+def cfgParse(cfgParam: str) -> Dict[str, Dict[str, str]]:
+    """Parses configuration file into a nested dictionary."""
     cfgParser = configparser.ConfigParser()
     cfgParser.read(cfgParam)
-    section = 'default'
     dictionary = {}
     for section in cfgParser.sections():
-        dictionary[section] = {}
-        for option in cfgParser.options(section):
-            dictionary[section][option] = cfgParser.get(section, option)
+        dictionary[section] = {opt: cfgParser.get(section, opt) for opt in cfgParser.options(section)}
     return dictionary
 
 
-def SourceFileCheck(source_list):
-    print("Read Source File")
-    frdr = pd.read_csv(source_list, header='infer', dtype=str)
-    path = os.path.split(source_list)[0]
-    InvalidFile = path + 'invalidfile' + '.txt'
+# ------------------ Vault Utilities ------------------
+def vault_client():
+    """Initialize Vault client using environment variables."""
+    vault_addr = os.getenv("VAULT_ADDR", "http://127.0.0.1:8200")
+    vault_token = os.getenv("VAULT_TOKEN", "dev-root")
+
+    client = hvac.Client(url=vault_addr, token=vault_token)
+    if not client.is_authenticated():
+        raise Exception("Vault authentication failed! Check VAULT_ADDR and VAULT_TOKEN.")
+    return client
+
+
+def dbutils_from_vault(conn_id: str) -> Tuple[str, str, str, str, str]:
+    """
+    Retrieve DB credentials from Vault.
+    Expects secrets stored at secret/<conn_id>.
+    """
+    client = vault_client()
+    try:
+        secret = client.secrets.kv.v2.read_secret_version(path=conn_id)
+        creds = secret["data"]["data"]
+
+        servername = creds["servername"]
+        database = creds["database"]
+        port = creds["port"]
+        username = creds["username"]
+        password = creds["password"]
+
+        return servername, database, port, username, password
+    except Exception as e:
+        raise Exception(f"Could not fetch credentials from Vault for {conn_id}: {e}")
+
+
+def connection(conn_id: str) -> str:
+    """Build SQLAlchemy connection string from Vault secrets."""
+    servername, database, port, username, password = dbutils_from_vault(conn_id)
+
+    if conn_id.endswith("_mysql"):
+        return f"mysql+pymysql://{username}:{password}@{servername}/{database}"
+    elif conn_id.endswith("_gpsql"):
+        return f"postgresql+psycopg2://{username}:{password}@{servername}:{port}/{database}"
+    else:
+        raise ValueError(f"Unsupported connection type: {conn_id}")
+
+
+# ------------------ Source File Validation ------------------
+def SourceFileCheck(source_list: str) -> pd.DataFrame:
+    """Validates source table list file (checks duplicates & missing values)."""
+    logging.info("Reading source file: %s", source_list)
+
+    try:
+        frdr = pd.read_csv(source_list, header='infer', dtype=str)
+    except Exception as e:
+        logging.error("Error reading source list file: %s", e)
+        return pd.DataFrame()
+
+    path = os.path.dirname(source_list)
+    InvalidFile = os.path.join(path, "invalidfile.txt")
+
     with open(InvalidFile, 'w') as wrtr:
         wrtr.write("source_schema,source_table,column,target_schema,target_table,status\n")
-    dup = frdr.copy()
-    clm = frdr.copy()
-    dup['duplicate'] = dup.duplicated()
-    dup = dup[dup['duplicate'] == True]
-    dup.drop('duplicate', axis=1, inplace=True)
-    dup['status'] = 'duplicate check'
-    clm = clm[clm.isnull().any(axis=1)]
-    clm['status'] = 'invalid record'
-    dup.to_csv(InvalidFile, sep=',', header=False, mode='a', index=False)
-    clm.to_csv(InvalidFile, sep=',', mode='a', header=False, index=False)
+
+    # Duplicate check
+    dup = frdr[frdr.duplicated()].copy()
+    dup["status"] = "duplicate record"
+
+    # Null value check
+    clm = frdr[frdr.isnull().any(axis=1)].copy()
+    clm["status"] = "invalid record"
+
+    # Save issues
+    for df in [dup, clm]:
+        if not df.empty:
+            df.to_csv(InvalidFile, sep=',', header=False, mode='a', index=False)
+
+    # Clean valid records
     frdr.drop_duplicates(inplace=True)
     frdr.dropna(inplace=True)
+
     return frdr
 
 
-def connection(conn_file, conn_id):
-    servername, database, port, username, password = dbutils(conn_file, conn_id)
-    if re.search(r'_mysql\b', conn_id):
-        db_connection_str = "mysql+pymysql://{2}:{3}@{0}/{1}".format(servername, database, username, password)
-    elif re.search(r'_gpsql\b', conn_id):
-        db_connection_str = "postgresql+psycopg2://{3}:{4}@{0}:{2}/{1}".format(servername, database, port, username,
-                                                                               password)
-    return db_connection_str
-
-
-def tbl_count(confile, conn_id, tbl_hldr):
-    db_connection_str = connection(confile, conn_id)
-    query = "select '{0}' as table_name,count(1) as count from {1}".format(tbl_hldr.split('.')[-1], tbl_hldr)
+# ------------------ DB Queries ------------------
+def tbl_count(conn_id: str, tbl_hldr: str) -> pd.DataFrame:
+    """Returns row count of a given table."""
+    query = f"SELECT '{tbl_hldr.split('.')[-1]}' AS table_name, COUNT(1) AS count FROM {tbl_hldr}"
+    db_connection_str = connection(conn_id)
     dbconn = create_engine(db_connection_str)
+
     try:
-        frame = pd.read_sql(query, dbconn)
+        return pd.read_sql(query, dbconn)
     except Exception as e:
-        print("Exception Occurred :{}".format(str(e)))
+        logging.error("Count query failed for %s: %s", tbl_hldr, e)
+        return pd.DataFrame()
     finally:
         dbconn.dispose()
-    return frame
 
 
-def unit_test_validation(project, subproject, db_src_id, db_tgt_id, conn_file, tgt_path, timestamp, ValidatedFile):
-    print("Unit Testing Process Started")
-    for id, row in ValidatedFile.iterrows():
-        SrcHldr = row['source_schema'] + '.' + row['source_table']
-        TgtHldr = row['target_schema'] + '.' + row['target_table']
-        column = row['column']
-        srcnt = tbl_count(conn_file, db_src_id, SrcHldr)
-        tgtcnt = tbl_count(conn_file, db_tgt_id, TgtHldr)
-        if int(srcnt['count']) > 0 and int(tgtcnt['count']) > 0 and (int(srcnt['count']) == int(tgtcnt['count'])):
-            if re.search(r',', row['column']):
-                column = row['column'].split(',')
+def tblrcrd(conn_id: str, hldr: str) -> pd.DataFrame:
+    """Fetches sample records from a table."""
+    query = f"SELECT * FROM {hldr} LIMIT 10"
+    db_connection_str = connection(conn_id)
+    dbconn = create_engine(db_connection_str)
+
+    try:
+        return pd.read_sql(query, dbconn)
+    except Exception as e:
+        logging.error("Error fetching records from %s: %s", hldr, e)
+        return pd.DataFrame()
+    finally:
+        dbconn.dispose()
+
+
+# ------------------ Validation Logic ------------------
+def pcol_check(src_pcol: pd.DataFrame, tgt_pcol: pd.DataFrame, column) -> bool:
+    """Checks if column(s) match between source and target samples."""
+    if isinstance(column, str):
+        column = [column]
+
+    try:
+        result = (src_pcol[column].reset_index(drop=True) == tgt_pcol[column].reset_index(drop=True))
+        return result.all().all()
+    except Exception as e:
+        logging.error("Primary column check failed: %s", e)
+        return False
+
+
+def unit_test_validation(project, subproject, db_src_id, db_tgt_id, tgt_path, timestamp, ValidatedFile):
+    logging.info("Unit Testing Process Started")
+    for _, row in ValidatedFile.iterrows():
+        SrcHldr = f"{row['source_schema']}.{row['source_table']}"
+        TgtHldr = f"{row['target_schema']}.{row['target_table']}"
+
+        srcnt = tbl_count(db_src_id, SrcHldr)
+        tgtnt = tbl_count(db_tgt_id, TgtHldr)
+
+        if not srcnt.empty and not tgtnt.empty:
+            if srcnt["count"].iloc[0] == tgtnt["count"].iloc[0]:
+                column = row["column"].split(",") if "," in row["column"] else row["column"]
+                src_pcol = tblrcrd(db_src_id, SrcHldr)
+                tgt_pcol = tblrcrd(db_tgt_id, TgtHldr)
+
+                if not src_pcol.empty and not tgt_pcol.empty:
+                    match = pcol_check(src_pcol, tgt_pcol, column)
+                    logging.info("Validation result for %s: %s", TgtHldr, "PASS" if match else "FAIL")
             else:
-                column = row['column']
-            src_pcol = tblrcrd(conn_file, db_src_id, SrcHldr)
-            tgt_pcol = tblrcrd(conn_file, db_tgt_id, TgtHldr)
-            pcol_cnt = pcol_check(src_pcol, tgt_pcol, column)
-            # data_check = data_validation(src_pcol,tgt_pcol)
+                logging.warning("Count mismatch: %s vs %s for %s", srcnt, tgtnt, TgtHldr)
         else:
-            print("Source Count and target cout not matching for : ", str(TgtHldr))
-            continue
+            logging.warning("Could not fetch counts for: %s", TgtHldr)
 
 
-def tblrcrd(conn_file, conn_id, hldr):
-    query = "select * from {0} limit 10".format(hldr)
-    db_connection_str = connection(conn_file, conn_id)
-    dbconn = create_engine(db_connection_str)
-    try:
-        frame = pd.read_sql(query, dbconn)
-    except Exception as e:
-        print("Exception Occured : {}", str(e))
-    finally:
-        dbconn.dispose()
-    return frame
-
-
-def pcol_check(src_pcol, tgt_pcol, column):
-    result = src_pcol[column] == tgt_pcol[column]
-    result.all()
-    return result.all()
-
-
-def dbutils(conn_file, conn_id):
-    with open(conn_file, 'r') as dbrdr:
-        dbdtls = [c for c in dbrdr if conn_id in c]
-    if len(dbdtls) == 0:
-        print("Db details not available for conn_id : ", conn_id)
-        exit(1)
-    else:
-        servername = dbdtls[0].split('|')[1]
-        port = dbdtls[0].split('|')[2]
-        database = dbdtls[0].split('|')[3]
-        username = dbdtls[0].split('|')[4]
-        password = dbdtls[0].split('|')[5]
-    return servername, database, port, username, password.strip('\n')
-
-
+# ------------------ Main ------------------
 if __name__ == '__main__':
     cfgParam = 'unit_test_config.txt'
     cfgBuilder = cfgParse(cfgParam)
-    project = cfgBuilder['default']["project"]
-    subproject = cfgBuilder['default']["subproject"]
-    db_src_id = cfgBuilder['default']["source_conn_id"]
-    db_tgt_id = cfgBuilder['default']["target_conn_id"]
-    conn_file = cfgBuilder['default']["credential_path"]
-    tgt_path = cfgBuilder['default']["target_directory"]
-    source_list = cfgBuilder['default']["source_table_list"]
+
+    default_cfg = cfgBuilder.get("default", {})
+    project = default_cfg.get("project")
+    subproject = default_cfg.get("subproject")
+    db_src_id = default_cfg.get("source_conn_id")
+    db_tgt_id = default_cfg.get("target_conn_id")
+    tgt_path = default_cfg.get("target_directory")
+    source_list = default_cfg.get("source_table_list")
     timestamp = time.strftime("%Y%m%d%H%M%S")
+
     ValidatedFile = SourceFileCheck(source_list)
-    if ValidatedFile.empty == False:
-        unit_test_validation(project, subproject, db_src_id, db_tgt_id, conn_file, tgt_path, timestamp, ValidatedFile)
+
+    if not ValidatedFile.empty:
+        unit_test_validation(project, subproject, db_src_id, db_tgt_id, tgt_path, timestamp, ValidatedFile)
     else:
-        print("Source File Empty,Exiting The Process")
+        logging.warning("Source File Empty, Exiting The Process")
