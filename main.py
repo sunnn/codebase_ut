@@ -1,30 +1,37 @@
 import time
+import json
 import logging
-from config_utils import parse_config
+
 from validation import validate_source_file, unit_test_validation
 from vault_utils import VaultClient
+from config_model import AppConfig
+
+def load_config_json(path: str) -> AppConfig:
+    with open(path, 'r') as f:
+        data = json.load(f)
+    return AppConfig(**data)
 
 def main():
-    cfg_file = 'unit_test_config.txt'
-    cfg = parse_config(cfg_file)
-
-    default_cfg = cfg.get("default", {})
-    project = default_cfg.get("project")
-    subproject = default_cfg.get("subproject")
-    db_src_id = default_cfg.get("source_conn_id")
-    db_tgt_id = default_cfg.get("target_conn_id")
-    tgt_path = default_cfg.get("target_directory")
-    source_list = default_cfg.get("source_table_list")
+    config = load_config_json("config.json")
     timestamp = time.strftime("%Y%m%d%H%M%S")
 
-    validated_file = validate_source_file(source_list)
+    validated_file = validate_source_file(config.source_table_list)
 
     if validated_file.empty:
         logging.warning("Source File Empty or invalid, Exiting The Process")
         return
 
     vault = VaultClient()
-    unit_test_validation(project, subproject, db_src_id, db_tgt_id, tgt_path, timestamp, validated_file, vault)
+    unit_test_validation(
+        project=config.project,
+        subproject=config.subproject,
+        db_src_id=config.source_conn_id,
+        db_tgt_id=config.target_conn_id,
+        tgt_path=config.target_directory,
+        timestamp=timestamp,
+        validated_df=validated_file,
+        vault_client=vault
+    )
 
 if __name__ == "__main__":
     main()
