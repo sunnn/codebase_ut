@@ -3,8 +3,8 @@ import pandas as pd
 import logging
 import traceback
 from typing import List
-from vault_utils import VaultClient
-from db_utils import build_connection_string, get_db_engine, get_table_count, get_sample_records
+from connection.vault_utils import VaultClient
+from connection.db_utils import build_connection_string, get_db_engine, get_table_count, get_sample_records
 
 def validate_source_file(file_path: str) -> pd.DataFrame:
     """

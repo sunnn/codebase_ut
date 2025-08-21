@@ -2,9 +2,9 @@ import time
 import json
 import logging
 
-from validation import validate_source_file, unit_test_validation
-from vault_utils import VaultClient
-from config_model import AppConfig
+from connection.validation import validate_source_file, unit_test_validation
+from connection.vault_utils import VaultClient
+from config.config_model import AppConfig
 
 def load_config_json(path: str) -> AppConfig:
     with open(path, 'r') as f:
