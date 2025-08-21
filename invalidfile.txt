@@ -1,2 +1,1 @@
 source_schema,source_table,column,target_schema,target_table,status
-sample,ratings,uid,wcdl,,invalid record
